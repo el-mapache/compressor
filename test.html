@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<head>
+  <script src='test.js'></script>
+  <style>
+    p {
+      margin: 0;
+      padding: 0;
+    }
+
+    .meter-legend {
+      display: inline-block;
+      text-align: right;
+      margin-left: 10px;
+    }
+
+    .meter-legend .legend-position {
+      display: inline-block;
+      padding: 5px 0 5px 0;
+    }
+
+    .meter-container {
+      border: 1px solid #3f3f3f;
+      display: inline-block;
+      height: 190px;
+      padding: 2px;
+      max-height: 190px;
+    }
+
+    .meter {
+      background: #52b152;
+      /*background: -webkit-linear-gradient(*/
+        /*#e21d1d 4%,
+        #ff9d00 12%,
+        #fff200 22%,
+        #f2ea00 37%,
+        #52b152 59%,
+        #52b152 59%,
+        #008a00 79%);*/
+      width: 10px;
+      height: 0;
+      transition: height .1s;
+
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <audio id='audio' src='test.wav' controls></audio>
+  </div>
+  <div>
+    <button id="toggle" type="button">Toggle</button>
+    <p id="status">enabled</p>
+    <div class="audio-meter">
+      <p>CLIP</p>
+      <div class="meter-container">
+        <div id="output-meter" class="meter"></div>
+      </div>
+      <div class="meter-legend">
+        <br>
+        <span class="legend-position">5</span>
+        <br>
+        <span>0</span>
+        <br>
+        <span>-5</span>
+        <br>
+        -10
+        <br>
+        -15
+        <br>
+        -20
+        <br>
+        -25
+        <br>
+        -35
+        <br>
+        -45
+        <br>
+        -55
+        <br>
+      </div>
+    </div>
+  </div>
+</body>
