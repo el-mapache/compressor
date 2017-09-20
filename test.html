@@ -18,16 +18,24 @@
       padding: 5px 0 5px 0;
     }
 
+    .audio-meter {
+      display: inline-block;
+    }
+
     .meter-container {
       border: 1px solid #3f3f3f;
+      border-radius: 4px;
       display: inline-block;
       height: 190px;
       padding: 2px;
       max-height: 190px;
+      position: relative;
+      width: 10px;
     }
 
     .meter {
       background: #52b152;
+      border-radius: 4px;
       /*background: -webkit-linear-gradient(*/
         /*#e21d1d 4%,
         #ff9d00 12%,
@@ -37,9 +45,14 @@
         #52b152 59%,
         #008a00 79%);*/
       width: 10px;
-      height: 0;
       transition: height .1s;
+      position: absolute;
+      bottom: 2px;
+    }
 
+    .meter.invert {
+      bottom: inital;
+      top: 2px;
     }
   </style>
 </head>
@@ -47,15 +60,17 @@
   <div>
     <audio id='audio' src='test.wav' controls></audio>
   </div>
-  <div>
+  <div style="width: 200px">
     <button id="toggle" type="button">Toggle</button>
     <p id="status">enabled</p>
+    <br/><br/>
     <div class="audio-meter">
-      <p>CLIP</p>
+      <p>output</p>
       <div class="meter-container">
         <div id="output-meter" class="meter"></div>
       </div>
       <div class="meter-legend">
+        <p>CLIP</p>
         <br>
         <span class="legend-position">5</span>
         <br>
@@ -79,5 +94,12 @@
         <br>
       </div>
     </div>
+    <div class="audio-meter">
+      <p>reduction</p>
+      <div class="meter-container">
+        <div id="reduction" class="meter invert"></div>
+      </div>
+    </div>
   </div>
+
 </body>

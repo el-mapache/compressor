@@ -124,7 +124,9 @@ const localStorageAdapter = (namespace) => {
 };
 
 const handleChange = storage => event => {
-  storage.setState({ [event.target.id]: Number(event.target.value) });
+  const { target } = event;
+
+  storage.setState({ [target.id]: Number(target.value) });
 };
 
 const Compressor = (() => {
@@ -209,9 +211,9 @@ const buildRangeInput = (descriptor) => {
   const input = Element.input(null, descriptor);
   const label = Element.label([
       descriptor.name,
-      input
+      input,
+      Element.span(null, { className: `range-value ${descriptor.name}`})
     ], { htmlFor: descriptor. name });
-
 
   return Element.div([ label ], { className: 'app' });
 };
@@ -230,10 +232,16 @@ const state = {
 };
 const changeHandler = handleChange(storage);
 const processor = audioContext.createScriptProcessor(1024, 1, 1);
+let reduction;
 let outputMeter;
 let meterHeight;
 
-const onAudioProcess = function (audioEvent) {
+const dbfs = (summedAudio, sampleLength) => {
+  const rms = Math.sqrt(summedAudio / (sampleLength / 2));
+  return 20 * (Math.log(rms) / Math.log(10));
+};
+
+const onAudioProcess = function (compressor, audioEvent) {
   const buffer = audioEvent.inputBuffer.getChannelData(0);
   const length = buffer.length;
   let sum = 0;
@@ -243,10 +251,19 @@ const onAudioProcess = function (audioEvent) {
     sum += sample * sample;
   }
 
-  const rms = Math.sqrt(sum / (length / 2));
-  const decibel = 20 * (Math.log(rms) / Math.log(10));
-  //console.log(Math.round(window.c.reduction.toFixed(2)));
-  drawOutput(decibel);
+  drawOutput(dbfs(sum, length));
+  drawReduction(compressor.reduction)
+}
+
+const drawReduction = function(decibels) {
+  const decibelsFixed = decibels.toFixed(2);
+
+  if (!Math.abs(Math.round(decibels))) {
+    reduction.style.height = 0;
+  } else {
+    const height = Math.abs(decibels);
+    reduction.style.height = `${height}px`;
+  }
 }
 
 const drawOutput = function(decibels) {
@@ -262,12 +279,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let active = true;
   const source = HTMLAudioSource(audioContext, 'audio');
   const compressor = Compressor(audioContext, storage);
-  window.c = compressor
-  storage.setState(state);
-
-
-  outputMeter = document.getElementById('output-meter');
-  meterHeight = Number(document.defaultView.getComputedStyle(document.querySelector('.meter-container'), null).getPropertyValue('max-height').split('px')[0]);
 
   storage.getState().then(currentState => {
     const inputDescriptors = [
@@ -278,11 +289,27 @@ document.addEventListener('DOMContentLoaded', () => {
       { name: 'knee', value: currentState.knee, min: '0', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler, 'data-tooltip': '' },
     ];
 
+    storage.subscribe(state => {
+      Object.keys(state).forEach(key => {
+        const value = state[key];
+        const node = document.querySelector(`.${key}`);
+
+        if (node) {
+          node.innerText = value;
+        }
+      });
+    });
+
     render(Element.div(inputDescriptors.map(d => {
       return buildRangeInput(d);
     })));
   });
 
+  storage.setState(state);
+
+  reduction = document.getElementById('reduction');
+  outputMeter = document.getElementById('output-meter');
+  meterHeight = Number(document.defaultView.getComputedStyle(document.querySelector('.meter-container'), null).getPropertyValue('max-height').split('px')[0]);
 
   source.then((s) => {
     // We have to manually disconnect everything to stop the compressor from functioning,
@@ -309,6 +336,6 @@ document.addEventListener('DOMContentLoaded', () => {
         active = true;
       }
     });
-    patch(source, [ compressor.node ], audioContext.destination, onAudioProcess);
+    patch(source, [ compressor.node ], audioContext.destination, onAudioProcess.bind(null, compressor));
   });
 });
