@@ -132,7 +132,7 @@ const handleChange = storage => event => {
 const Compressor = (() => {
   function _Compressor(audioContext, storage) {
     this.node = audioContext.createDynamicsCompressor();
-
+    this.gain = audioContext.createGain();
     this.setState = this.setState.bind(this);
     storage.subscribe(this.setState);
   }
@@ -167,6 +167,11 @@ const Compressor = (() => {
     },
 
     set(key, value) {
+      if (key === 'gain') {
+        this.gain.gain.value = value;
+        return;
+      }
+
       if (!this.compressor[key]) return;
 
       this.compressor[key].value = value;
@@ -228,6 +233,7 @@ const state = {
   attack: 0.003,
   release: 0.25,
   knee: 20,
+  gain: 1,
   enabled: true
 };
 const changeHandler = handleChange(storage);
@@ -270,7 +276,10 @@ const drawOutput = function(decibels) {
   if (!isFinite(decibels)) {
     outputMeter.style.height = 0;
   } else {
-    const height = meterHeight - 20 + (decibels * 5);
+    let height = meterHeight - 20 + (decibels * 5);
+
+    if (height > 190) height = 190;
+
     outputMeter.style.height = `${height}px`;
   }
 };
@@ -287,6 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
       { name: 'attack', value: currentState.attack, min: '0', max: '1', step: '0.001', type: 'range', id: 'attack', input: changeHandler, 'data-tooltip': '' },
       { name: 'release', value: currentState.release, min: '0', max: '1', step: '0.05', type: 'range', id: 'release', input: changeHandler, 'data-tooltip': '' },
       { name: 'knee', value: currentState.knee, min: '0', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler, 'data-tooltip': '' },
+      { name: 'gain', value: currentState.gain, min: '0', max: '20', step: '1', type: 'range', id: 'gain', input: changeHandler, 'data-tooltip': '' }
     ];
 
     storage.subscribe(state => {
@@ -303,9 +313,9 @@ document.addEventListener('DOMContentLoaded', () => {
     render(Element.div(inputDescriptors.map(d => {
       return buildRangeInput(d);
     })));
-  });
 
-  storage.setState(state);
+    storage.setState(state);
+  });
 
   reduction = document.getElementById('reduction');
   outputMeter = document.getElementById('output-meter');
@@ -336,6 +346,6 @@ document.addEventListener('DOMContentLoaded', () => {
         active = true;
       }
     });
-    patch(source, [ compressor.node ], audioContext.destination, onAudioProcess.bind(null, compressor));
+    patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
   });
 });
