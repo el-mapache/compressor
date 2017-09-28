@@ -54,8 +54,13 @@ const jsonParse = (maybeJson) => {
   });
 }
 
-const Storage = (namespace) => {
+const Storage = (namespace, defaultState) => {
   return Object.create(Object.prototype, {
+    defaultState: {
+      value: defaultState,
+      writable: false,
+      configurable: false
+    },
     namespace: {
       value: namespace,
       writable: false,
@@ -68,8 +73,18 @@ const Storage = (namespace) => {
   });
 };
 
-const localStorageAdapter = (namespace) => {
-  return Object.create(Storage(namespace), {
+const localStorageAdapter = (namespace, defaultState) => {
+  return Object.create(Storage(namespace, defaultState), {
+    clear: {
+      value: function() {
+        this.getState(this.namespace).then(state => {
+          if (state) {
+            localStorage.setItem(this.namespace, JSON.stringify(this.defaultState));
+          }
+        });
+      }
+    },
+
     update: {
       value: function(lastState, nextState) {
         localStorage.setItem(this.namespace, JSON.stringify(nextState));
@@ -226,7 +241,7 @@ const buildRangeInput = (descriptor) => {
 const render = tree => document.body.appendChild(tree);
 
 const audioContext = new AudioContext();
-const storage = localStorageAdapter('sb-compressor');
+const STORAGE_NAMESPACE = 'sb-compressor';
 const state = {
   threshold: -40,
   ratio: 12,
@@ -236,6 +251,7 @@ const state = {
   gain: 1,
   enabled: true
 };
+const storage = localStorageAdapter(STORAGE_NAMESPACE, state);
 const changeHandler = handleChange(storage);
 const processor = audioContext.createScriptProcessor(1024, 1, 1);
 let reduction;
@@ -290,13 +306,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const compressor = Compressor(audioContext, storage);
 
   storage.getState().then(currentState => {
+    let nextState;
+
+    nextState = currentState === null ? state : currentState;
+
     const inputDescriptors = [
-      { name: 'threshold', value: currentState.threshold, min: '-100', max: '0', step: '1', type: 'range', id: 'threshold', input: changeHandler, 'data-tooltip': '' },
-      { name: 'ratio', value: currentState.ratio, min: '1', max: '20', step: '1', type: 'range', id: 'ratio', input: changeHandler, 'data-tooltip': '' },
-      { name: 'attack', value: currentState.attack, min: '0', max: '1', step: '0.001', type: 'range', id: 'attack', input: changeHandler, 'data-tooltip': '' },
-      { name: 'release', value: currentState.release, min: '0', max: '1', step: '0.05', type: 'range', id: 'release', input: changeHandler, 'data-tooltip': '' },
-      { name: 'knee', value: currentState.knee, min: '0', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler, 'data-tooltip': '' },
-      { name: 'gain', value: currentState.gain, min: '0', max: '20', step: '1', type: 'range', id: 'gain', input: changeHandler, 'data-tooltip': '' }
+      { name: 'threshold', value: nextState.threshold, min: '-100', max: '0', step: '1', type: 'range', id: 'threshold', input: changeHandler, 'data-tooltip': '' },
+      { name: 'ratio', value: nextState.ratio, min: '1', max: '20', step: '1', type: 'range', id: 'ratio', input: changeHandler, 'data-tooltip': '' },
+      { name: 'attack', value: nextState.attack, min: '0', max: '1', step: '0.001', type: 'range', id: 'attack', input: changeHandler, 'data-tooltip': '' },
+      { name: 'release', value: nextState.release, min: '0', max: '1', step: '0.05', type: 'range', id: 'release', input: changeHandler, 'data-tooltip': '' },
+      { name: 'knee', value: nextState.knee, min: '0', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler, 'data-tooltip': '' },
+      { name: 'gain', value: nextState.gain, min: '0', max: '20', step: '1', type: 'range', id: 'gain', input: changeHandler, 'data-tooltip': '' }
     ];
 
     storage.subscribe(state => {
@@ -314,7 +334,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return buildRangeInput(d);
     })));
 
-    storage.setState(state);
+    storage.setState(nextState);
   });
 
   reduction = document.getElementById('reduction');
@@ -347,5 +367,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
     patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
+  });
+
+  document.getElementById('clear-settings').addEventListener('click', () => {
+
   });
 });
