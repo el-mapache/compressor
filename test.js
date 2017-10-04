@@ -75,20 +75,21 @@ const Storage = (namespace, defaultState) => {
 
 const localStorageAdapter = (namespace, defaultState) => {
   return Object.create(Storage(namespace, defaultState), {
-    clear: {
+    reset: {
       value: function() {
-        this.getState(this.namespace).then(state => {
-          if (state) {
-            localStorage.setItem(this.namespace, JSON.stringify(this.defaultState));
-          }
+        this.getState().then(_ => {
+          localStorage.setItem(this.namespace, JSON.stringify(this.defaultState));
         });
       }
     },
 
     update: {
-      value: function(lastState, nextState) {
-        localStorage.setItem(this.namespace, JSON.stringify(nextState));
-        this.handlers.forEach(handler => handler(lastState, nextState));
+      value: async function(lastState, nextState) {
+        const state = await this.getState();
+        const finalState = Object.assign({}, state, nextState);
+
+        localStorage.setItem(this.namespace, JSON.stringify(finalState));
+        this.handlers.forEach(handler => handler(lastState, finalState));
       },
       writable: false,
       configurable: false
@@ -97,7 +98,9 @@ const localStorageAdapter = (namespace, defaultState) => {
     getState: {
       value: function get(key = null) {
         return new Promise((resolve, reject) => {
-          jsonParse(localStorage.getItem(this.namespace)).then(result => {
+          const appState = localStorage.getItem(this.namespace);
+
+          return jsonParse(appState).then(result => {
             if (!key) {
               resolve(result);
             } else {
@@ -206,12 +209,22 @@ const Compressor = (() => {
 
 function HTMLAudioSource(context, elementID) {
   return new Promise(function(resolve, reject) {
-    resolve(context.createMediaElementSource(document.getElementById(elementID)));
+    const node = document.getElementById(elementID);
+
+    if (!node) {
+      reject(`Node with ID ${elementID} does not exist.`);
+    }
+
+    try {
+      resolve(context.createMediaElementSource(node));
+    } catch(error) {
+      reject('Error creating media element source: ', error.message);
+    }
   });
 }
 
-function patch(audioSourcePromise, audioGraph = [], destination, processCallback = false) {
-  audioSourcePromise.then((source) => {
+function patch(/**audioSourcePromise,**/source, audioGraph = [], destination, processCallback = false) {
+  //audioSourcePromise.then((source) => {
     const graph = audioGraph.reduce((val, item) => {
       val.connect(item);
       return item;
@@ -224,7 +237,7 @@ function patch(audioSourcePromise, audioGraph = [], destination, processCallback
     }
 
     graph.connect(destination);
-  });
+  //});
 }
 
 const buildRangeInput = (descriptor) => {
@@ -263,6 +276,8 @@ const dbfs = (summedAudio, sampleLength) => {
   return 20 * (Math.log(rms) / Math.log(10));
 };
 
+const clamp = (value, max) => value > max ? max : value;
+
 const onAudioProcess = function (compressor, audioEvent) {
   const buffer = audioEvent.inputBuffer.getChannelData(0);
   const length = buffer.length;
@@ -292,17 +307,15 @@ const drawOutput = function(decibels) {
   if (!isFinite(decibels)) {
     outputMeter.style.height = 0;
   } else {
-    let height = meterHeight - 20 + (decibels * 5);
-
-    if (height > 190) height = 190;
+    let height = clamp(meterHeight - 20 + (decibels * 5), 190);
 
     outputMeter.style.height = `${height}px`;
   }
 };
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   let active = true;
-  const source = HTMLAudioSource(audioContext, 'audio');
+  const source = await HTMLAudioSource(audioContext, 'audio');
   const compressor = Compressor(audioContext, storage);
 
   storage.getState().then(currentState => {
@@ -341,35 +354,34 @@ document.addEventListener('DOMContentLoaded', () => {
   outputMeter = document.getElementById('output-meter');
   meterHeight = Number(document.defaultView.getComputedStyle(document.querySelector('.meter-container'), null).getPropertyValue('max-height').split('px')[0]);
 
-  source.then((s) => {
-    // We have to manually disconnect everything to stop the compressor from functioning,
-    // then reconnect the source to the destination.
-    // The process is reversed when the compressor is toggled back on
-    document.getElementById('toggle').addEventListener('click', (event) => {
-      if (active) {
-        compressor.node.disconnect(audioContext.destination);
-        compressor.node.disconnect(processor);
-        processor.disconnect(audioContext.destination);
-        s.disconnect(compressor.node);
-        s.connect(audioContext.destination);
-        storage.setState('enabled', false)
-        document.getElementById('status').innerText = 'disabled';
-        active = false;
-      } else {
-        s.disconnect(audioContext.destination);
-        s.connect(compressor.node);
-        compressor.node.connect(audioContext.destination);
-        compressor.node.connect(processor);
-        processor.connect(audioContext.destination);
-        storage.setState('enabled', true);
-        document.getElementById('status').innerText = 'enabled';
-        active = true;
-      }
-    });
-    patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
+  // We have to manually disconnect everything to stop the compressor from functioning,
+  // then reconnect the source to the destination.
+  // The process is reversed when the compressor is toggled back on
+  document.getElementById('toggle').addEventListener('click', (event) => {
+    if (active) {
+      compressor.node.disconnect(audioContext.destination);
+      compressor.node.disconnect(processor);
+      processor.disconnect(audioContext.destination);
+      s.disconnect(compressor.node);
+      s.connect(audioContext.destination);
+      storage.setState('enabled', false)
+      document.getElementById('status').innerText = 'disabled';
+      active = false;
+    } else {
+      s.disconnect(audioContext.destination);
+      s.connect(compressor.node);
+      compressor.node.connect(audioContext.destination);
+      compressor.node.connect(processor);
+      processor.connect(audioContext.destination);
+      storage.setState('enabled', true);
+      document.getElementById('status').innerText = 'enabled';
+      active = true;
+    }
   });
 
-  document.getElementById('clear-settings').addEventListener('click', () => {
+  patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
 
+  document.getElementById('clear-settings').addEventListener('click', () => {
+    storage.reset();
   });
 });
