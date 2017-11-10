@@ -1,4 +1,13 @@
 const UNITS = 'px';
+const dampingFactor = .8;
+// represents the bottom of the output scale (-60 dB) and the top
+// of the reduction scale (+60dB)
+// The actual compressor reaches values slightly above and below this,
+// but this approximation is sufficient
+const floor = 60;
+// Represents the amount of headroom after zero in the output meter
+const ceiling = 20;
+
 let playing = false;
 
 /** Element creator **/
@@ -271,6 +280,7 @@ const processor = audioContext.createScriptProcessor(1024, 1, 1);
 let reduction;
 let outputMeter;
 let meterHeight;
+let heightBeforePeak;
 
 const dbfs = (summedAudio, sampleLength) => {
   const rms = Math.sqrt(summedAudio / (sampleLength / 2));
@@ -292,21 +302,25 @@ const onAudioProcess = function (compressor, audioEvent) {
   if (playing) {
     drawOutput(dbfs(sum, length));
     drawReduction(compressor.reduction);
+  } else {
+    drawOutput(0);
+    drawReduction(0);
   }
 }
 
 const drawReduction = function(decibels) {
   const dBFixed = decibels.toFixed(2);
 
+  /**
+   * Occasionally, the `reduction` property will report really low values,
+   * like -0.000001. We floor and flip the sign to make sure the draw actually
+   * needs to happen. This seems to happen mostly when no audio is coming through
+   */
   if (!(~(dBFixed | 0) + 1)) {
     reduction.style.height = 0;
   } else {
-    const damping = .8;
-    const heightBeforePeak = meterHeight * damping;
-    const floor = 60;
-    const ceiling = 20;
-    const floorOrCeiling = dBFixed > 0 ? ceiling : floor;
-    const height = clamp(heightBeforePeak + (dBFixed / floorOrCeiling) * heightBeforePeak, 190);
+
+    const height = clamp(Math.abs(meterHeight * (dBFixed / floor)), meterHeight);
     console.log(decibels, height);
     reduction.style.height = `${height}${UNITS}`;
   }
@@ -315,15 +329,11 @@ const drawReduction = function(decibels) {
 const drawOutput = function(decibels) {
   const decibelsFixed = decibels.toFixed(2);
 
-  if (!isFinite(decibels)) {
+  if (!isFinite(decibels) || !decibels) {
     outputMeter.style.height = 0;
   } else {
-    const damping = .8;
-    const heightBeforePeak = meterHeight * damping;
-    const floor = 60;
-    const ceiling = 20;
     const floorOrCeiling = decibels > 0 ? ceiling : floor;
-    const height = clamp(heightBeforePeak + (decibels / floorOrCeiling) * heightBeforePeak, 190);
+    const height = clamp(heightBeforePeak + (decibels / floorOrCeiling) * heightBeforePeak, meterHeight);
 
     outputMeter.style.height = `${height}${UNITS}`;
   }
@@ -369,7 +379,7 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   reduction = document.getElementById('reduction');
   outputMeter = document.getElementById('output-meter');
   meterHeight = Number(document.defaultView.getComputedStyle(document.querySelector('.meter-container'), null).getPropertyValue('max-height').split('px')[0]);
-
+  heightBeforePeak = meterHeight * dampingFactor;
   // We have to manually disconnect everything to stop the compressor from functioning,
   // then reconnect the source to the destination.
   // The process is reversed when the compressor is toggled back on
@@ -397,9 +407,13 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
 
   patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
 
-  document.querySelector('audio').addEventListener('play', () => {
+  const audioEl = document.querySelector('audio');
+  const togglePlaying = () => {
     playing = !playing ? true : false;
-  });
+  }
+
+  audioEl.addEventListener('play', togglePlaying);
+  audioEl.addEventListener('pause', togglePlaying);
 
   document.getElementById('clear-settings').addEventListener('click', () => {
     storage.reset();
