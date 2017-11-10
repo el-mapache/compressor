@@ -1,3 +1,6 @@
+const UNITS = 'px';
+let playing = false;
+
 /** Element creator **/
 const Element = (() => {
   const listeners = ['change', 'input', 'click'];
@@ -223,21 +226,19 @@ function HTMLAudioSource(context, elementID) {
   });
 }
 
-function patch(/**audioSourcePromise,**/source, audioGraph = [], destination, processCallback = false) {
-  //audioSourcePromise.then((source) => {
-    const graph = audioGraph.reduce((val, item) => {
-      val.connect(item);
-      return item;
-    }, source);
+function patch(source, audioGraph = [], destination, processCallback = false) {
+  const graph = audioGraph.reduce((val, item) => {
+    val.connect(item);
+    return item;
+  }, source);
 
-    if (processCallback && typeof processCallback === 'function') {
-      processor.onaudioprocess = processCallback;
-      graph.connect(processor)
-      processor.connect(destination);
-    }
+  if (processCallback && typeof processCallback === 'function') {
+    processor.onaudioprocess = processCallback;
+    graph.connect(processor)
+    processor.connect(destination);
+  }
 
-    graph.connect(destination);
-  //});
+  graph.connect(destination);
 }
 
 const buildRangeInput = (descriptor) => {
@@ -288,28 +289,43 @@ const onAudioProcess = function (compressor, audioEvent) {
     sum += sample * sample;
   }
 
-  drawOutput(dbfs(sum, length));
-  drawReduction(compressor.reduction)
+  if (playing) {
+    drawOutput(dbfs(sum, length));
+    drawReduction(compressor.reduction);
+  }
 }
 
 const drawReduction = function(decibels) {
-  const decibelsFixed = decibels.toFixed(2);
+  const dBFixed = decibels.toFixed(2);
 
-  if (!Math.abs(Math.round(decibels))) {
+  if (!(~(dBFixed | 0) + 1)) {
     reduction.style.height = 0;
   } else {
-    const height = Math.abs(decibels);
-    reduction.style.height = `${height}px`;
+    const damping = .8;
+    const heightBeforePeak = meterHeight * damping;
+    const floor = 60;
+    const ceiling = 20;
+    const floorOrCeiling = dBFixed > 0 ? ceiling : floor;
+    const height = clamp(heightBeforePeak + (dBFixed / floorOrCeiling) * heightBeforePeak, 190);
+    console.log(decibels, height);
+    reduction.style.height = `${height}${UNITS}`;
   }
 }
 
 const drawOutput = function(decibels) {
+  const decibelsFixed = decibels.toFixed(2);
+
   if (!isFinite(decibels)) {
     outputMeter.style.height = 0;
   } else {
-    let height = clamp(meterHeight - 20 + (decibels * 5), 190);
+    const damping = .8;
+    const heightBeforePeak = meterHeight * damping;
+    const floor = 60;
+    const ceiling = 20;
+    const floorOrCeiling = decibels > 0 ? ceiling : floor;
+    const height = clamp(heightBeforePeak + (decibels / floorOrCeiling) * heightBeforePeak, 190);
 
-    outputMeter.style.height = `${height}px`;
+    outputMeter.style.height = `${height}${UNITS}`;
   }
 };
 
@@ -332,7 +348,7 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
       { name: 'gain', value: nextState.gain, min: '0', max: '20', step: '1', type: 'range', id: 'gain', input: changeHandler, 'data-tooltip': '' }
     ];
 
-    storage.subscribe(state => {
+    storage.subscribe((lastState, state) => {
       Object.keys(state).forEach(key => {
         const value = state[key];
         const node = document.querySelector(`.${key}`);
@@ -380,6 +396,10 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   });
 
   patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
+
+  document.querySelector('audio').addEventListener('play', () => {
+    playing = !playing ? true : false;
+  });
 
   document.getElementById('clear-settings').addEventListener('click', () => {
     storage.reset();
