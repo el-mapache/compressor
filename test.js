@@ -15,7 +15,7 @@ const Element = (() => {
   const listeners = ['change', 'input', 'click'];
 
   const childFromType = child =>
-    typeof child === 'string' ? document.createTextNode(child) : child;
+    typeof child === 'string' || typeof child === 'number' ? document.createTextNode(child) : child;
 
   const normalizeChildren = children =>
     Array.isArray(children) ? children : [ children ];
@@ -45,9 +45,11 @@ const Element = (() => {
         }
 
         for (let child of normalizedChildren) {
-          if (!child) continue;
-
-          el.appendChild(childFromType(child));
+          if (child) {
+            el.appendChild(childFromType(child));
+          } else {
+            continue;
+          }
         }
 
         return el;
@@ -89,8 +91,9 @@ const localStorageAdapter = (namespace, defaultState) => {
   return Object.create(Storage(namespace, defaultState), {
     reset: {
       value: function() {
-        this.getState().then(_ => {
+        return this.getState().then(_ => {
           localStorage.setItem(this.namespace, JSON.stringify(this.defaultState));
+          return this.defaultState;
         });
       }
     },
@@ -151,12 +154,6 @@ const localStorageAdapter = (namespace, defaultState) => {
       }
     }
   });
-};
-
-const handleChange = storage => event => {
-  const { target } = event;
-
-  storage.setState({ [target.id]: Number(target.value) });
 };
 
 const Compressor = (() => {
@@ -241,6 +238,9 @@ function patch(source, audioGraph = [], destination, processCallback = false) {
     return item;
   }, source);
 
+  // Add onaudioprocess callback to the processor, and connect the graph to the processor
+  // so that transformed audio can be evaluated properly
+  // TODO: encapsulate maybe
   if (processCallback && typeof processCallback === 'function') {
     processor.onaudioprocess = processCallback;
     graph.connect(processor)
@@ -255,28 +255,68 @@ const buildRangeInput = (descriptor) => {
   const label = Element.label([
       descriptor.name,
       input,
-      Element.span(null, { className: `range-value ${descriptor.name}`})
+      Element.span(descriptor.value, { className: `range-value ${descriptor.name}` })
     ], { htmlFor: descriptor. name });
 
-  return Element.div([ label ], { className: 'app' });
+  return Element.div([ label ]);
 };
 
-const render = tree => document.body.appendChild(tree);
+const render = (target = document.body, tree) => {
+  const oldNode = target.children && target.children[0] || null;
+  const nextNode = tree;
+
+  if (!oldNode) {
+    target.appendChild(nextNode);
+  } else {
+    target.replaceChild(nextNode, oldNode);
+  }
+};
 
 const audioContext = new AudioContext();
 const STORAGE_NAMESPACE = 'sb-compressor';
 const state = {
   threshold: -40,
   ratio: 12,
-  attack: 0.003,
-  release: 0.25,
+  attack: 0.1,
+  release: 0.1,
   knee: 20,
   gain: 1,
   enabled: true
 };
 const storage = localStorageAdapter(STORAGE_NAMESPACE, state);
-const changeHandler = handleChange(storage);
 const processor = audioContext.createScriptProcessor(1024, 1, 1);
+
+const RangeInputController = (el, storage) => {
+  const element = el;
+  const handleChange = storage => event => {
+    const { target } = event;
+
+    storage.setState({ [target.id]: Number(target.value) });
+  };
+  const changeHandler = handleChange(storage);
+  const generateInputState = state => {
+    return [
+      { name: 'threshold', value: state.threshold, min: '-100', max: '0', step: '1', type: 'range', id: 'threshold', input: changeHandler },
+      { name: 'ratio', value: state.ratio, min: '1', max: '20', step: '1', type: 'range', id: 'ratio', input: changeHandler },
+      { name: 'attack', value: state.attack, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'attack', input: changeHandler },
+      { name: 'release', value: state.release, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'release', input: changeHandler },
+      { name: 'knee', value: state.knee, min: '0', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler },
+      { name: 'gain', value: state.gain, min: '0', max: '10', step: '1', type: 'range', id: 'gain', input: changeHandler }
+    ];
+  };
+
+  return {
+    render(state) {
+      console.log(element)
+      render(element, Element.div(generateInputState(state).map(d => {
+        return buildRangeInput(d);
+      })));
+    }
+  }
+};
+
+const inputController = RangeInputController(document.getElementById('input-controls'), storage);
+
 let reduction;
 let outputMeter;
 let meterHeight;
@@ -319,9 +359,7 @@ const drawReduction = function(decibels) {
   if (!(~(dBFixed | 0) + 1)) {
     reduction.style.height = 0;
   } else {
-
     const height = clamp(Math.abs(meterHeight * (dBFixed / floor)), meterHeight);
-    console.log(decibels, height);
     reduction.style.height = `${height}${UNITS}`;
   }
 }
@@ -349,15 +387,6 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
 
     nextState = currentState === null ? state : currentState;
 
-    const inputDescriptors = [
-      { name: 'threshold', value: nextState.threshold, min: '-100', max: '0', step: '1', type: 'range', id: 'threshold', input: changeHandler, 'data-tooltip': '' },
-      { name: 'ratio', value: nextState.ratio, min: '1', max: '20', step: '1', type: 'range', id: 'ratio', input: changeHandler, 'data-tooltip': '' },
-      { name: 'attack', value: nextState.attack, min: '0', max: '1', step: '0.001', type: 'range', id: 'attack', input: changeHandler, 'data-tooltip': '' },
-      { name: 'release', value: nextState.release, min: '0', max: '1', step: '0.05', type: 'range', id: 'release', input: changeHandler, 'data-tooltip': '' },
-      { name: 'knee', value: nextState.knee, min: '0', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler, 'data-tooltip': '' },
-      { name: 'gain', value: nextState.gain, min: '0', max: '20', step: '1', type: 'range', id: 'gain', input: changeHandler, 'data-tooltip': '' }
-    ];
-
     storage.subscribe((lastState, state) => {
       Object.keys(state).forEach(key => {
         const value = state[key];
@@ -369,9 +398,7 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
       });
     });
 
-    render(Element.div(inputDescriptors.map(d => {
-      return buildRangeInput(d);
-    })));
+    inputController.render(currentState);
 
     storage.setState(nextState);
   });
@@ -416,6 +443,6 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   audioEl.addEventListener('pause', togglePlaying);
 
   document.getElementById('clear-settings').addEventListener('click', () => {
-    storage.reset();
+    storage.reset().then(state => inputController.render(state));
   });
 });
