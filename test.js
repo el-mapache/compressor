@@ -324,7 +324,7 @@ let heightBeforePeak;
 
 const dbfs = (summedAudio, sampleLength) => {
   const rms = Math.sqrt(summedAudio / (sampleLength / 2));
-  return 20 * (Math.log(rms) / Math.log(10));
+  return 20 * Math.log10(rms);
 };
 
 const clamp = (value, max) => value > max ? max : value;
@@ -412,20 +412,17 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   // The process is reversed when the compressor is toggled back on
   document.getElementById('toggle').addEventListener('click', (event) => {
     if (active) {
-      compressor.node.disconnect(audioContext.destination);
-      compressor.node.disconnect(processor);
+      compressor.gain.disconnect(audioContext.destination);
+      compressor.gain.disconnect(processor);
       processor.disconnect(audioContext.destination);
-      s.disconnect(compressor.node);
-      s.connect(audioContext.destination);
+      source.disconnect(compressor.node);
+      source.connect(audioContext.destination);
       storage.setState('enabled', false)
       document.getElementById('status').innerText = 'disabled';
       active = false;
     } else {
-      s.disconnect(audioContext.destination);
-      s.connect(compressor.node);
-      compressor.node.connect(audioContext.destination);
-      compressor.node.connect(processor);
-      processor.connect(audioContext.destination);
+      source.disconnect(audioContext.destination);
+      patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
       storage.setState('enabled', true);
       document.getElementById('status').innerText = 'enabled';
       active = true;
