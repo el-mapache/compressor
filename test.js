@@ -14,7 +14,7 @@ const getStylePropOfElement = (selector, prop) => {
 
 /** Element creator **/
 const Element = (() => {
-  const listeners = ['change', 'input', 'click'];
+  const listeners = ['change', 'input', 'click', 'blur', 'focus'];
 
   const childFromType = child =>
     typeof child === 'string' || typeof child === 'number' ? document.createTextNode(child) : child;
@@ -29,20 +29,23 @@ const Element = (() => {
         const normalizedChildren = normalizeChildren(children);
 
         for (let attr in attrs) {
-          if (typeof attrs[attr] === undefined || !attrs[attr]) {
-            continue;
+          let attribute = attr;
+          let attributeValue = attrs[attr];
+
+          if (typeof attributeValue === undefined) {
+            attributeValue = '';
           }
 
           if (listeners.indexOf(attr) !== -1) {
-            el.addEventListener(attr, attrs[attr]);
+            el.addEventListener(attr, attributeValue);
           } else {
-            if (attr === 'className' && attrs[attr]) {
-              el.setAttribute('class', attrs[attr]);
+            if (attr === 'className') {
+              attribute = 'class';
             } else if (attr === 'htmlFor') {
-              el.setAttribute('for', attrs[attr]);
-            } else {
-              el.setAttribute(attr, attrs[attr]);
+              attribute = 'for';
             }
+
+            el.setAttribute(attribute, attributeValue);
           }
         }
 
@@ -93,7 +96,7 @@ const localStorageAdapter = (namespace, defaultState) => {
   return Object.create(Storage(namespace, defaultState), {
     reset: {
       value: function() {
-        return this.getState().then(_ => {
+        return this.getState().then(() => {
           localStorage.setItem(this.namespace, JSON.stringify(this.defaultState));
           return this.defaultState;
         });
@@ -164,10 +167,15 @@ const Compressor = (() => {
     this.node = audioContext.createDynamicsCompressor();
     this.gain = audioContext.createGain();
     this.setState = this.setState.bind(this);
+
     storage.subscribe(this.setState);
   }
 
   _Compressor.prototype = {
+    get out() {
+      return this.gain;
+    },
+
     get compressor() {
       return this.node;
     },
@@ -240,7 +248,7 @@ const Compressor = (() => {
 })();
 
 function HTMLAudioSource(context, elementID) {
-  return new Promise(function(resolve, reject) {
+  return new Promise((resolve, reject) => {
     const node = document.getElementById(elementID);
 
     if (!node) {
@@ -255,37 +263,20 @@ function HTMLAudioSource(context, elementID) {
   });
 }
 
-function patch(source, audioGraph = [], destination, processCallback = false) {
-  const graph = audioGraph.reduce((val, item) => {
-    val.connect(item);
-    return item;
-  }, source);
-
-  // Add onaudioprocess callback to the processor, and connect the graph to the processor
-  // so that transformed audio can be evaluated properly
-  // TODO: encapsulate maybe
-  if (processCallback && typeof processCallback === 'function') {
-    processor.onaudioprocess = processCallback;
-    graph.connect(processor)
-    processor.connect(destination);
-  }
-
-  graph.connect(destination);
-}
-
 const buildRangeInput = (descriptor) => {
   const input = Element.input(null, descriptor);
+  const inputValue = Element.span(descriptor.value, { className: `range-value ${descriptor.name}` });
   const label = Element.label([
       descriptor.name,
       input,
-      Element.span(descriptor.value, { className: `range-value ${descriptor.name}` })
+      inputValue,
     ], { htmlFor: descriptor. name });
 
   return Element.div([ label ]);
 };
 
 const render = (target = document.body, tree) => {
-  const oldNode = target.children && target.children[0] || null;
+  const oldNode = (target.children && target.children[0]) || null;
   const nextNode = tree;
 
   if (!oldNode) {
@@ -324,7 +315,7 @@ const RangeInputController = (el, storage) => {
       { name: 'attack', value: state.attack, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'attack', input: changeHandler },
       { name: 'release', value: state.release, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'release', input: changeHandler },
       { name: 'knee', value: state.knee, min: '0.001', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler },
-      { name: 'gain', value: state.gain, min: '0', max: '10', step: '1', type: 'range', id: 'gain', input: changeHandler }
+      { name: 'gain', value: state.gain, min: '0.001', max: '10', step: '1', type: 'range', id: 'gain', input: changeHandler }
     ];
   };
 
@@ -366,7 +357,7 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
     }
   });
 
-  const onAudioProcess = function (compressor, audioEvent) {
+  const onAudioProcess = compressor => (audioEvent) => {
     const buffer = audioEvent.inputBuffer.getChannelData(0);
     const length = buffer.length;
     const sum = buffer.reduce((sum, sample) => sum + (sample * sample), 0);
@@ -407,6 +398,7 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   // The process is reversed when the compressor is toggled back on
   document.getElementById('toggle').addEventListener('click', (event) => {
     if (active) {
+      // TODO: clear meters. Will need a meter object most likely!
       compressor.gain.disconnect(audioContext.destination);
       compressor.gain.disconnect(processor);
       processor.disconnect(audioContext.destination);
@@ -417,14 +409,36 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
       active = false;
     } else {
       source.disconnect(audioContext.destination);
-      patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
+      patch(source, [ compressor.out ], audioContext.destination, processFn);
       storage.setState('enabled', true);
       document.getElementById('status').innerText = 'enabled';
       active = true;
     }
   });
 
-  patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
+  const sourceGraph = new AudioGraph();
+  const nodeGraph = new AudioGraph();
+  const processorGraph = new AudioGraph();
+  const processFn = onAudioProcess(compressor);
+  processor.onaudioprocess = processFn;
+
+  nodeGraph.chain([
+    {
+      name: 'compressor',
+      node: compressor.node,
+    },
+    {
+      name: 'gain',
+      node: compressor.out
+    }
+  ]);
+  sourceGraph.push(new AudioNode({ name: 'source', node: source }));
+  sourceGraph.connect(nodeGraph.head.node);
+  processorGraph.push(new AudioNode({name: 'processor', node: processor}));
+  nodeGraph.connect(processorGraph.head.node);
+
+  processorGraph.connect(audioContext.destination);
+  nodeGraph.connect(audioContext.destination);
 
   const audioEl = document.querySelector('audio');
   const togglePlaying = () => {
@@ -555,3 +569,227 @@ class ReductionMeter extends Meter {
     }
   }
 }
+
+class AudioNode {
+  constructor({ node, name, next, prev }) {
+    this.prev = prev || null;
+    this.next = next || null;
+    this.node = node
+    this.name = name;
+  }
+
+  nextNode() {
+    return this.next && this.next.node;
+  }
+
+  prevNode() {
+    return this.prev && this.prev.node;
+  }
+
+  connect(node) {
+    return this.node.connect(node);
+  }
+
+  disconnect() {
+    return this.node.disconnect(node);
+  }
+}
+
+/// HEADS UP: AudioGraph and AudioNode are the same thing. they both need to share some common
+/// functionality, which I guess ill write later
+
+const AudioGraph = (() => {
+  const lookup = {};
+
+  return class {
+    constructor() {
+      this.head = null;
+      this.tail = null;
+      this.length = 0;
+    }
+
+    chain(nodes) {
+      nodes.forEach((node) => {
+        const audioNode = new AudioNode(node);
+
+        this.push(audioNode);
+      });
+
+      let currentNode = this.head;
+
+      while (currentNode) {
+        const nextNode = currentNode.next;
+
+        if (!nextNode) {
+          break;
+        }
+
+        currentNode.connect(nextNode.node);
+        currentNode = nextNode;
+      }
+    }
+
+    push(node) {
+      if (this.head === null) {
+        this.head = node;
+      }
+
+      if (this.tail) {
+        this.tail.next = node;
+        node.prev = this.tail;
+        this.tail = node;
+      } else { // there is no tail
+        // set the head's next pointer to the node being added
+        this.head.next = node;
+
+        // set the new node's previous pointer to the list head
+        node.prev = this.head;
+
+        // set the tail equal to the current node — the next pointer remains null
+        this.tail = node;
+      }
+
+      this.length += 1;
+      lookup[node.name] = node;
+    }
+
+    insertBefore(location, node) {
+      const insertNode = lookup[location];
+
+      if (!insertNode) {
+        throw new Error('Can\'t insert a node before one that doesn\'t exist');
+      }
+    }
+
+    insertAfter(location, node) {
+
+    }
+
+    connect(node) {
+      this.tail.connect(node);
+    }
+
+    disconnect(node) {
+      this.tail.disconnect(node);
+    }
+
+    patch(node) {
+      const nodeToPatch = typeof node === 'string' ? this.access(location) : node;
+
+      nodeToPatch.prevNode().disconnect(nodeToPatch.nextNode());
+      nodeToPatch.connect(nodeToPatch.nextNode());
+    }
+
+    unpatch(node) {
+      const nodeToRemove = typeof node === 'string' ? this.access(location) : node;
+
+      nodeToRemove.disconnect(nodeToRemove.nextNode());
+      nodeToRemove.prevNode().connect(nodeToRemove.nextNode());
+    }
+
+    access(nodeName) {
+      return lookup[nodeName];
+    }
+  }
+})();
+
+
+/**
+ * example audio chain
+ * source -> compressor -> destination
+ */
+/**
+ * to disconnect an active node, we have to:
+ *    disconnect the node from the node following it
+ *    connect the node preceeding it to the node following it
+ *
+ *    same process needed for the script processor node
+ *
+ *    so we need to maintain our own graph? can i store this as a flat map with
+ *    previous and next pointers? Basically a linked list with keys? What issues would that
+ *    expose?
+ *
+ *    If there were multiple compressors, like in a mixing desk, there would be a channel,
+ *    that channel would be connected to other channels, script processor, and the destination...
+ *    each channel would also have its own graph (connected to the script processor as well?)
+ *
+ *    graph {
+ *      soundSource: {
+ *        previous: null,
+ *        next: [compressor]
+ *      }
+ *
+ *      compressor {
+ *        previous: soundSource,
+ *        next: [
+ *          scriptProcessor,
+ *          destination
+ *        ]
+ *      }
+ *
+ *      destination: {
+ *        previous: compressor
+ *        next: null
+ *      }
+ *
+ *    }
+ *
+ *    class Node() {
+ *      this.previous = { preceeding param node in chain }
+ *      this.next { [ following nodes in chain ] }
+ *      this.name = { the name of the node in the graph }
+ *
+ *    }
+ *
+ *    a channel is a group of nodes. it also has previous and next properties.
+ *    when a channel is disconnected, the last node in its node collection is disconnected,
+ *    and all other nodes in that collection are ignored. They remain connected to each other,
+ *    but not to the system.
+ *
+ *    these graphs should all be pretty small so there isnt really a huge disadvantage to
+ *    using linked lists, but! i dont want to remove a node that doesnt have any pointers
+ *    to it, I want to to stay there, ready to be repatched.
+ *
+ *    the downside of a channel always needing to have a reference to the name of its terminal
+ *    component is not that big. ALSO, all channels will have a gain, so theoretically that gain
+ *    can be its terminal point. each channels gain can be connnected to the next.
+ *    The previous node can always point to the last gain.
+ *
+ *    gain being the terminal node makes sense!
+ *
+ *    class Channel extends Node {
+ *      super(attrs)
+ *
+ *
+ *
+ *    }
+ *
+ *    class
+ *
+ *    every node can have a graph / graph is made of up nodes
+ *
+ *    patch also need to add the node if it doesnt have an entry in the graph already
+ *
+ *    patch(newNode, position) {
+ *      const patchInto = position.next;
+ *      patchInto.forEach(patchPoint =>
+ *        position.node.disconnect(patchPoint)
+ *        position.node.connect(newNode);
+ *        newNode.connect(patchPoint)
+ *      )
+ *
+ *      newNode.next = position.next;
+ *      newNode.previous = position
+ *      position.next = [newNode]
+ *    }
+ *
+ *    unpatch(nodeToRemove) {
+ *      nodeToRemove.next.forEach(patchPoint =>
+ *        nodeToRemove.disconnect(graph[patchPoint])
+ *        graph[nodeToRemove.previous].connect(graph[patchPoint])
+ *      )
+ *
+ *      nodeToRemove.next = null
+ *      nodeToRemove.previous = null
+ *    }
+ */
