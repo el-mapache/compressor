@@ -158,6 +158,7 @@ const localStorageAdapter = (namespace, defaultState) => {
 
 const Compressor = (() => {
   function _Compressor(audioContext, storage) {
+    this.context = audioContext;
     this.node = audioContext.createDynamicsCompressor();
     this.gain = audioContext.createGain();
     this.setState = this.setState.bind(this);
@@ -193,18 +194,38 @@ const Compressor = (() => {
       return this.compressor.reduction;
     },
 
-    set(key, value) {
-      if (key === 'gain') {
-        this.gain.gain.value = value;
-        return;
+    adjustValue(param, value) {
+      if (value < param.minValue) {
+        realValue = param.minValue;
+      } else if (param.maxValue === 0 && value >= 0) {
+        realValue = -0.001;
+      } else {
+        realValue = value;
       }
 
-      if (!this.compressor[key]) return;
-
-      this.compressor[key].value = value;
+      param.exponentialRampToValueAtTime(realValue, this.context.currentTime);
     },
 
-    setState(changes) {
+    set(key, value) {
+      const param = key === 'gain' ? this.gain.gain : this.compressor[key];
+
+      if (param) {
+        this.adjustValue(param, value);
+      }
+    },
+
+    setState(prevState, nextState) {
+      // storage obj should be reporting what changed maybe?
+      const changes = Object.keys(nextState).reduce((memo, key) => {
+        const param = nextState[key];
+
+        if (param !== prevState[key]) {
+          memo[key] = param;
+        }
+
+        return memo;
+      }, {});
+
       for (let prop in changes) {
         this.set(prop, changes[prop]);
       }
@@ -300,17 +321,18 @@ const RangeInputController = (el, storage) => {
       { name: 'ratio', value: state.ratio, min: '1', max: '20', step: '1', type: 'range', id: 'ratio', input: changeHandler },
       { name: 'attack', value: state.attack, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'attack', input: changeHandler },
       { name: 'release', value: state.release, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'release', input: changeHandler },
-      { name: 'knee', value: state.knee, min: '0', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler },
+      { name: 'knee', value: state.knee, min: '0.001', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler },
       { name: 'gain', value: state.gain, min: '0', max: '10', step: '1', type: 'range', id: 'gain', input: changeHandler }
     ];
   };
 
   return {
     render(state) {
-      console.log(element)
-      render(element, Element.div(generateInputState(state).map(d => {
-        return buildRangeInput(d);
-      })));
+      const htmlTree = generateInputState(state)
+        .map(descriptor => buildRangeInput(descriptor));
+      const appHtml = Element.div(htmlTree);
+
+      render(element, appHtml);
     }
   }
 };
@@ -332,12 +354,7 @@ const clamp = (value, max) => value > max ? max : value;
 const onAudioProcess = function (compressor, audioEvent) {
   const buffer = audioEvent.inputBuffer.getChannelData(0);
   const length = buffer.length;
-  let sum = 0;
-
-  for (let i = 0; i < length; i++) {
-    const sample = buffer[i];
-    sum += sample * sample;
-  }
+  const sum = buffer.reduce((sum, sample) => sum + (sample * sample), 0);
 
   if (playing) {
     drawOutput(dbfs(sum, length));
@@ -398,7 +415,8 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
       });
     });
 
-    inputController.render(currentState);
+    inputController.render(nextState);
+    compressor.setState({}, nextState);
 
     storage.setState(nextState);
   });
