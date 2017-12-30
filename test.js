@@ -1,14 +1,16 @@
-const UNITS = 'px';
-const dampingFactor = .8;
-// represents the bottom of the output scale (-60 dB) and the top
-// of the reduction scale (+60dB)
-// The actual compressor reaches values slightly above and below this,
-// but this approximation is sufficient
-const floor = 60;
-// Represents the amount of headroom after zero in the output meter
-const ceiling = 20;
-
 let playing = false;
+
+const getDOMNode = (maybeSelector) => {
+  return typeof maybeSelector === 'string' ?
+    document.querySelector(maybeSelector)  :
+    maybeSelector;
+};
+
+const getStylePropOfElement = (selector, prop) => {
+  const el = getDOMNode(selector);
+
+  return document.defaultView.getComputedStyle(el).getPropertyValue(prop);
+};
 
 /** Element creator **/
 const Element = (() => {
@@ -339,11 +341,6 @@ const RangeInputController = (el, storage) => {
 
 const inputController = RangeInputController(document.getElementById('input-controls'), storage);
 
-let reduction;
-let outputMeter;
-let meterHeight;
-let heightBeforePeak;
-
 const dbfs = (summedAudio, sampleLength) => {
   const rms = Math.sqrt(summedAudio / (sampleLength / 2));
   return 20 * Math.log10(rms);
@@ -351,53 +348,37 @@ const dbfs = (summedAudio, sampleLength) => {
 
 const clamp = (value, max) => value > max ? max : value;
 
-const onAudioProcess = function (compressor, audioEvent) {
-  const buffer = audioEvent.inputBuffer.getChannelData(0);
-  const length = buffer.length;
-  const sum = buffer.reduce((sum, sample) => sum + (sample * sample), 0);
-
-  if (playing) {
-    drawOutput(dbfs(sum, length));
-    drawReduction(compressor.reduction);
-  } else {
-    drawOutput(0);
-    drawReduction(0);
-  }
-}
-
-const drawReduction = function(decibels) {
-  const dBFixed = decibels.toFixed(2);
-
-  /**
-   * Occasionally, the `reduction` property will report really low values,
-   * like -0.000001. We floor and flip the sign to make sure the draw actually
-   * needs to happen. This seems to happen mostly when no audio is coming through
-   */
-  if (!(~(dBFixed | 0) + 1)) {
-    reduction.style.height = 0;
-  } else {
-    const height = clamp(Math.abs(meterHeight * (dBFixed / floor)), meterHeight);
-    reduction.style.height = `${height}${UNITS}`;
-  }
-}
-
-const drawOutput = function(decibels) {
-  const decibelsFixed = decibels.toFixed(2);
-
-  if (!isFinite(decibels) || !decibels) {
-    outputMeter.style.height = 0;
-  } else {
-    const floorOrCeiling = decibels > 0 ? ceiling : floor;
-    const height = clamp(heightBeforePeak + (decibels / floorOrCeiling) * heightBeforePeak, meterHeight);
-
-    outputMeter.style.height = `${height}${UNITS}`;
-  }
-};
-
 document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   let active = true;
   const source = await HTMLAudioSource(audioContext, 'audio');
   const compressor = Compressor(audioContext, storage);
+
+  const outputMeterInst = new OutputMeter('#output-meter', {
+    intervals: [5, 0, -10, -15, -20, -25, -35, -45, -55],
+    legend: 'output',
+  });
+
+  const reductionMeterInst = new ReductionMeter('#reduction-meter', {
+    intervals: [0, 10, 15, 20, 25, 35, 45, 55, 60],
+    legend: 'reduction',
+    meterAttrs: {
+      className: ['invert']
+    }
+  });
+
+  const onAudioProcess = function (compressor, audioEvent) {
+    const buffer = audioEvent.inputBuffer.getChannelData(0);
+    const length = buffer.length;
+    const sum = buffer.reduce((sum, sample) => sum + (sample * sample), 0);
+
+    if (playing) {
+      outputMeterInst.drawLevel(dbfs(sum, length));
+      reductionMeterInst.drawLevel(compressor.reduction);
+    } else {
+      outputMeterInst.drawLevel(0);
+      reductionMeterInst.drawLevel(0);
+    }
+  }
 
   storage.getState().then(currentState => {
     let nextState;
@@ -421,10 +402,6 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
     storage.setState(nextState);
   });
 
-  reduction = document.getElementById('reduction');
-  outputMeter = document.getElementById('output-meter');
-  meterHeight = Number(document.defaultView.getComputedStyle(document.querySelector('.meter-container'), null).getPropertyValue('max-height').split('px')[0]);
-  heightBeforePeak = meterHeight * dampingFactor;
   // We have to manually disconnect everything to stop the compressor from functioning,
   // then reconnect the source to the destination.
   // The process is reversed when the compressor is toggled back on
@@ -461,3 +438,120 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
     storage.reset().then(state => inputController.render(state));
   });
 });
+
+const meterDefaults = {
+  meter: {
+    // Represents the amount of headroom after zero in the output meter
+    ceiling: 20,
+    // represents the bottom of the output scale (-60 dB) and the top
+    // of the reduction scale (+60dB)
+    // The actual compressor reaches values slightly above and below this,
+    // but this approximation is sufficient
+    floor: 60,
+    units: 'px',
+    dampingFactor: 0.8,
+  },
+  intervals: [],
+  legend: null,
+  legendAttrs: {},
+  meterAttrs: {},
+};
+
+class Meter {
+  constructor(el, options = meterDefaults) {
+    this.el = getDOMNode(el);
+    this.options = { ...meterDefaults, ...options };
+
+    this.render();
+
+    this.meterHeight = Number(getStylePropOfElement(this.el, 'max-height').split('px')[0]);
+    this.heightBeforePeak = this.meterHeight * this.options.meter.dampingFactor;
+    this.meter = this.el.querySelector('.meter');
+  }
+
+  render() {
+    const {
+      intervals,
+      legend,
+      legendAttrs,
+      meterAttrs,
+    } = this.options
+
+    const meterClasses = meterAttrs.className &&
+      meterAttrs.className.join(' ');
+
+    const intervalsNode = intervals.reduce((memo, interval) => {
+      return memo.concat([
+        Element.span([
+          Element.br(),
+          String(interval),
+        ], { className: 'interval' })
+      ]);
+    }, []);
+
+    const intervalsContainer = Element.div(intervalsNode, { className: 'meter-legend' });
+
+    const meter = Element.div([
+      Element.div(null, {
+        className: `meter ${meterClasses}`,
+      }),
+    ], { className: 'meter-container' });
+
+    const container = Element.div([
+      Element.p(legend, legendAttrs || {}),
+      meter,
+      intervalsContainer,
+    ]);
+
+    this.el.appendChild(container);
+  }
+}
+
+class OutputMeter extends Meter {
+  constructor(el, options) {
+    super(el, options);
+
+    this.drawLevel = this.drawLevel.bind(this);
+  }
+
+  drawLevel(decibels) {
+    const { ceiling, floor, units } = this.options.meter;
+    const { meterHeight, heightBeforePeak } = this;
+    const decibelsFixed = decibels.toFixed(2);
+
+    if (!isFinite(decibels) || !decibels) {
+      this.meter.style.height = 0;
+    } else {
+      const floorOrCeiling = decibels > 0 ? ceiling : floor;
+      const height = clamp(heightBeforePeak + (decibels / floorOrCeiling) * heightBeforePeak, meterHeight);
+
+      this.meter.style.height = `${height}${units}`;
+    }
+  }
+}
+
+class ReductionMeter extends Meter {
+  constructor(el, options) {
+    super(el, options);
+
+    this.drawLevel = this.drawLevel.bind(this);
+  }
+
+  drawLevel(decibels) {
+    const dBFixed = decibels.toFixed(2);
+    const { meterHeight } = this;
+    const { floor, units } = this.options.meter;
+
+    /**
+     * Occasionally, the `reduction` property will report really low values,
+     * like -0.000001. We floor and flip the sign to make sure the draw actually
+     * needs to happen. This seems to happen mostly when no audio is coming through
+     */
+    if (!(~(dBFixed | 0) + 1)) {
+      this.meter.style.height = 0;
+    } else {
+      const height = clamp(Math.abs(meterHeight * (dBFixed / floor)), meterHeight);
+      this.meter.style.height = `${height}${units}`;
+    }
+  }
+}

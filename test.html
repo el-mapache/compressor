@@ -6,6 +6,12 @@
       padding: 0;
     }
 
+    .interval:before {
+      content: '';
+      display: inline-block;
+      padding-top: 20px;
+    }
+
     .meter-legend {
       display: inline-block;
       text-align: right;
@@ -19,6 +25,8 @@
 
     .audio-meter {
       display: inline-block;
+      max-height: 190px;
+      height: 190px;
     }
 
     .meter-container {
@@ -27,7 +35,6 @@
       display: inline-block;
       height: 190px;
       padding: 2px;
-      max-height: 190px;
       position: relative;
       width: 10px;
     }
@@ -66,42 +73,8 @@
     <button id="toggle" type="button">Toggle</button>
     <p id="status">enabled</p>
     <br/><br/>
-    <div class="audio-meter">
-      <p>output</p>
-      <div class="meter-container">
-        <div id="output-meter" class="meter"></div>
-      </div>
-      <div class="meter-legend">
-        <p>CLIP</p>
-        <br>
-        <span class="legend-position">5</span>
-        <br>
-        <span>0</span>
-        <br>
-        <span>-5</span>
-        <br>
-        -10
-        <br>
-        -15
-        <br>
-        -20
-        <br>
-        -25
-        <br>
-        -35
-        <br>
-        -45
-        <br>
-        -55
-        <br>
-      </div>
-    </div>
-    <div class="audio-meter">
-      <p>reduction</p>
-      <div class="meter-container">
-        <div id="reduction" class="meter invert"></div>
-      </div>
-    </div>
+    <div id="output-meter" class="audio-meter"></div>
+    <div id="reduction-meter" class="audio-meter"></div>
   </div>
   <div id="input-controls"></div>
   <script src='test.js'></script>
