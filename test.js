@@ -422,6 +422,7 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   const processFn = onAudioProcess(compressor);
   processor.onaudioprocess = processFn;
 
+  sourceGraph.push(new AudioNode({ name: 'source', node: source }));
   nodeGraph.chain([
     {
       name: 'compressor',
@@ -597,7 +598,6 @@ class AudioNode {
 
 /// HEADS UP: AudioGraph and AudioNode are the same thing. they both need to share some common
 /// functionality, which I guess ill write later
-
 const AudioGraph = (() => {
   const lookup = {};
 
@@ -654,6 +654,7 @@ const AudioGraph = (() => {
     }
 
     insertBefore(location, node) {
+      // TODO: WRITE THIS FUNCTION
       const insertNode = lookup[location];
 
       if (!insertNode) {
@@ -662,7 +663,7 @@ const AudioGraph = (() => {
     }
 
     insertAfter(location, node) {
-
+      // TODO: WRITE THIS FUNCTION
     }
 
     connect(node) {
