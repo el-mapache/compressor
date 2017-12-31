@@ -442,8 +442,29 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
   nodeGraph.connect(audioContext.destination);
 
   const audioEl = document.querySelector('audio');
+  /**
+   * Time in MS that the code should delay the audio before hitting the signal chain
+   * This is useful when 'crushing' the source material, such as when using the compressor
+   * as an extreme limiter.  The web audio dynamics node, while pretty fast, is not fast enough to
+   * apply very hard limiting to plosive sounds.
+   *
+   * This will affect a gentle fade in, at the cost of hearing the sound immediately.
+   * Something like this might be better installed at the end of your signal chain
+   */
+  const fadeInBuffer = 160; // TODO: Make this opt in, upon initialization of plug-in
+
+
   const togglePlaying = () => {
-    playing = !playing ? true : false;
+    storage.getState().then((state) => {
+      storage.setState({
+        gain: 0.0001
+      });
+      playing = !playing ? true : false;
+
+      setTimeout(() => {
+        storage.setState({ gain: state.gain})
+      }, fadeInBuffer);
+    });
   }
 
   audioEl.addEventListener('play', togglePlaying);
