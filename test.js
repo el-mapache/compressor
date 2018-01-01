@@ -14,7 +14,7 @@ const getStylePropOfElement = (selector, prop) => {
 
 /** Element creator **/
 const Element = (() => {
-  const listeners = ['change', 'input', 'click'];
+  const listeners = ['change', 'input', 'click', 'blur', 'focus'];
 
   const childFromType = child =>
     typeof child === 'string' || typeof child === 'number' ? document.createTextNode(child) : child;
@@ -29,20 +29,23 @@ const Element = (() => {
         const normalizedChildren = normalizeChildren(children);
 
         for (let attr in attrs) {
-          if (typeof attrs[attr] === undefined || !attrs[attr]) {
-            continue;
+          let attribute = attr;
+          let attributeValue = attrs[attr];
+
+          if (typeof attributeValue === undefined) {
+            attributeValue = '';
           }
 
           if (listeners.indexOf(attr) !== -1) {
-            el.addEventListener(attr, attrs[attr]);
+            el.addEventListener(attr, attributeValue);
           } else {
-            if (attr === 'className' && attrs[attr]) {
-              el.setAttribute('class', attrs[attr]);
+            if (attr === 'className') {
+              attribute = 'class';
             } else if (attr === 'htmlFor') {
-              el.setAttribute('for', attrs[attr]);
-            } else {
-              el.setAttribute(attr, attrs[attr]);
+              attribute = 'for';
             }
+
+            el.setAttribute(attribute, attributeValue);
           }
         }
 
@@ -74,17 +77,12 @@ const Storage = (namespace, defaultState) => {
   return Object.create(Object.prototype, {
     defaultState: {
       value: defaultState,
-      writable: false,
-      configurable: false
     },
     namespace: {
       value: namespace,
-      writable: false,
-      configurable: false
     },
     handlers: {
       value: [],
-      writable: true
     }
   });
 };
@@ -93,7 +91,7 @@ const localStorageAdapter = (namespace, defaultState) => {
   return Object.create(Storage(namespace, defaultState), {
     reset: {
       value: function() {
-        return this.getState().then(_ => {
+        return this.getState().then(() => {
           localStorage.setItem(this.namespace, JSON.stringify(this.defaultState));
           return this.defaultState;
         });
@@ -108,8 +106,6 @@ const localStorageAdapter = (namespace, defaultState) => {
         localStorage.setItem(this.namespace, JSON.stringify(finalState));
         this.handlers.forEach(handler => handler(lastState, finalState));
       },
-      writable: false,
-      configurable: false
     },
 
     getState: {
@@ -164,10 +160,15 @@ const Compressor = (() => {
     this.node = audioContext.createDynamicsCompressor();
     this.gain = audioContext.createGain();
     this.setState = this.setState.bind(this);
+
     storage.subscribe(this.setState);
   }
 
   _Compressor.prototype = {
+    get out() {
+      return this.gain;
+    },
+
     get compressor() {
       return this.node;
     },
@@ -240,7 +241,7 @@ const Compressor = (() => {
 })();
 
 function HTMLAudioSource(context, elementID) {
-  return new Promise(function(resolve, reject) {
+  return new Promise((resolve, reject) => {
     const node = document.getElementById(elementID);
 
     if (!node) {
@@ -255,37 +256,20 @@ function HTMLAudioSource(context, elementID) {
   });
 }
 
-function patch(source, audioGraph = [], destination, processCallback = false) {
-  const graph = audioGraph.reduce((val, item) => {
-    val.connect(item);
-    return item;
-  }, source);
-
-  // Add onaudioprocess callback to the processor, and connect the graph to the processor
-  // so that transformed audio can be evaluated properly
-  // TODO: encapsulate maybe
-  if (processCallback && typeof processCallback === 'function') {
-    processor.onaudioprocess = processCallback;
-    graph.connect(processor)
-    processor.connect(destination);
-  }
-
-  graph.connect(destination);
-}
-
 const buildRangeInput = (descriptor) => {
   const input = Element.input(null, descriptor);
+  const inputValue = Element.span(descriptor.value, { className: `range-value ${descriptor.name}` });
   const label = Element.label([
       descriptor.name,
       input,
-      Element.span(descriptor.value, { className: `range-value ${descriptor.name}` })
+      inputValue,
     ], { htmlFor: descriptor. name });
 
   return Element.div([ label ]);
 };
 
 const render = (target = document.body, tree) => {
-  const oldNode = target.children && target.children[0] || null;
+  const oldNode = (target.children && target.children[0]) || null;
   const nextNode = tree;
 
   if (!oldNode) {
@@ -317,21 +301,21 @@ const RangeInputController = (el, storage) => {
     storage.setState({ [target.id]: Number(target.value) });
   };
   const changeHandler = handleChange(storage);
-  const generateInputState = state => {
+  const mapStateToInputProps = state => {
     return [
       { name: 'threshold', value: state.threshold, min: '-100', max: '0', step: '1', type: 'range', id: 'threshold', input: changeHandler },
       { name: 'ratio', value: state.ratio, min: '1', max: '20', step: '1', type: 'range', id: 'ratio', input: changeHandler },
       { name: 'attack', value: state.attack, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'attack', input: changeHandler },
       { name: 'release', value: state.release, min: '0.1', max: '1', step: '0.1', type: 'range', id: 'release', input: changeHandler },
       { name: 'knee', value: state.knee, min: '0.001', max: '40', step: '1', type: 'range', id: 'knee', input: changeHandler },
-      { name: 'gain', value: state.gain, min: '0', max: '10', step: '1', type: 'range', id: 'gain', input: changeHandler }
+      { name: 'gain', value: state.gain, min: '0.001', max: '10', step: '1', type: 'range', id: 'gain', input: changeHandler }
     ];
   };
 
   return {
     render(state) {
-      const htmlTree = generateInputState(state)
-        .map(descriptor => buildRangeInput(descriptor));
+      const htmlTree = mapStateToInputProps(state)
+        .map(inputProps => buildRangeInput(inputProps));
       const appHtml = Element.div(htmlTree);
 
       render(element, appHtml);
@@ -366,17 +350,21 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
     }
   });
 
-  const onAudioProcess = function (compressor, audioEvent) {
+  const onAudioProcess = compressor => (audioEvent) => {
     const buffer = audioEvent.inputBuffer.getChannelData(0);
     const length = buffer.length;
     const sum = buffer.reduce((sum, sample) => sum + (sample * sample), 0);
 
-    if (playing) {
-      outputMeterInst.drawLevel(dbfs(sum, length));
+    if (active) {
       reductionMeterInst.drawLevel(compressor.reduction);
     } else {
-      outputMeterInst.drawLevel(0);
       reductionMeterInst.drawLevel(0);
+    }
+
+    if (playing) {
+      outputMeterInst.drawLevel(dbfs(sum, length));
+    } else {
+      outputMeterInst.drawLevel(0);
     }
   }
 
@@ -402,33 +390,70 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
     storage.setState(nextState);
   });
 
-  // We have to manually disconnect everything to stop the compressor from functioning,
-  // then reconnect the source to the destination.
-  // The process is reversed when the compressor is toggled back on
   document.getElementById('toggle').addEventListener('click', (event) => {
     if (active) {
-      compressor.gain.disconnect(audioContext.destination);
-      compressor.gain.disconnect(processor);
-      processor.disconnect(audioContext.destination);
-      source.disconnect(compressor.node);
-      source.connect(audioContext.destination);
+      active = false;
+      compressorGraph.unpatchFrom(sourceAudioNode);
       storage.setState('enabled', false)
       document.getElementById('status').innerText = 'disabled';
-      active = false;
     } else {
-      source.disconnect(audioContext.destination);
-      patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
+      compressorGraph.patchInto(sourceAudioNode);
       storage.setState('enabled', true);
       document.getElementById('status').innerText = 'enabled';
       active = true;
     }
   });
 
-  patch(source, [ compressor.node, compressor.gain ], audioContext.destination, onAudioProcess.bind(null, compressor));
+  // compressor chain
+  const compressorGraph = new AudioGraph();
+
+  const processFn = onAudioProcess(compressor);
+  processor.onaudioprocess = processFn;
+
+  compressorGraph.chain([
+    {
+      name: 'compressor',
+      node: compressor.node,
+    },
+    {
+      name: 'gain',
+      node: compressor.out
+    }
+  ]);
+
+  const sourceAudioNode = new AudioNode({ name: 'source', node: source });
+  const processorAudioNode = new AudioNode({ name: 'processor', node: processor });
+  const destinationAudioNode = new AudioNode({ name: 'output', node: audioContext.destination });
+
+  compressorGraph.insertAudioNode(sourceAudioNode);
+  compressorGraph.outputToAudioNode(processorAudioNode);
+  compressorGraph.outputToAudioNode(destinationAudioNode);
+  processorAudioNode.connect(destinationAudioNode.node);
 
   const audioEl = document.querySelector('audio');
+  /**
+   * Time in MS that the code should delay the audio before hitting the signal chain
+   * This is useful when 'crushing' the source material, like when using the compressor
+   * as an extreme limiter.  The web audio dynamics node, while pretty fast, is not fast enough to
+   * apply very hard limiting to plosives.
+   *
+   * This will affect a gentle fade in, at the cost of hearing the sound immediately.
+   * Something like this might be better installed at the end of your signal chain
+   */
+  const fadeInBuffer = 160; // TODO: Make this opt in, upon initialization of plug-in
+
+
   const togglePlaying = () => {
-    playing = !playing ? true : false;
+    storage.getState().then((state) => {
+      storage.setState({
+        gain: 0.0001
+      });
+      playing = !playing ? true : false;
+
+      setTimeout(() => {
+        storage.setState({ gain: state.gain})
+      }, fadeInBuffer);
+    });
   }
 
   audioEl.addEventListener('play', togglePlaying);
@@ -555,3 +580,135 @@ class ReductionMeter extends Meter {
     }
   }
 }
+
+class AudioNode {
+  constructor({ node, name, next, prev }) {
+    this.prev = prev || null;
+    this.next = next || null;
+    this.node = node
+    this.name = name;
+  }
+
+  nextNode() {
+    return this.next && this.next.node;
+  }
+
+  prevNode() {
+    return this.prev && this.prev.node;
+  }
+
+  // connect and disconnect proxy to underlying AudioParam object
+  connect(node) {
+    return this.node.connect(node);
+  }
+
+  disconnect(node) {
+    return this.node.disconnect(node);
+  }
+}
+
+/// HEADS UP: AudioGraph and AudioNode are (basically?) the same thing.
+// it seems like maybe i can rewrite these to share functionality
+// TODO: rewrite these, the first pass was meh
+const AudioGraph = (() => {
+  const lookup = {};
+  const outputs = [];
+
+  return class {
+    constructor() {
+      this.head = null;
+      this.tail = null;
+      this.length = 0;
+    }
+
+    chain(nodes) {
+      nodes.forEach((node) => {
+        const audioNode = new AudioNode(node);
+
+        this.push(audioNode);
+      });
+
+      let currentNode = this.head;
+
+      while (currentNode) {
+        const nextNode = currentNode.next;
+
+        if (!nextNode) {
+          break;
+        }
+
+        currentNode.connect(nextNode.node);
+        currentNode = nextNode;
+      }
+    }
+
+    push(node) {
+      if (this.head === null) {
+        this.head = node;
+      }
+
+      if (this.tail) {
+        this.tail.next = node;
+        node.prev = this.tail;
+        this.tail = node;
+      } else { // there is no tail
+        // set the head's next pointer to the node being added
+        this.head.next = node;
+
+        // set the new node's previous pointer to the list head
+        node.prev = this.head;
+
+        // set the tail equal to the current node — the next pointer remains null
+        this.tail = node;
+      }
+
+      this.length += 1;
+      lookup[node.name] = node;
+    }
+
+    patch(node) {
+      const nodeToPatch = typeof node === 'string' ? this.access(location) : node;
+
+      nodeToPatch.prevNode().disconnect(nodeToPatch.nextNode());
+      nodeToPatch.connect(nodeToPatch.nextNode());
+    }
+
+    unpatch(node) {
+      const nodeToRemove = typeof node === 'string' ? this.access(location) : node;
+
+      nodeToRemove.disconnect(nodeToRemove.nextNode());
+      nodeToRemove.prevNode().connect(nodeToRemove.nextNode());
+    }
+
+    insertAudioNode(audioNode) {
+      audioNode.connect(this.head.node);
+    }
+
+    outputToAudioNode(audioNode) {
+      outputs.push(audioNode.node);
+
+      this.tail.node.connect(audioNode.node);
+    }
+
+    patchInto(node) {
+      outputs.forEach((audioNode) => {
+        // this assumes that the node we want to patch into is connected to
+        // the outputs, but that isnt necessarily the case.
+        node.disconnect(audioNode);
+        node.connect(this.head.node);
+        this.tail.node.connect(audioNode);
+      });
+    }
+
+    unpatchFrom(node) {
+      outputs.forEach((audioNode) => {
+        this.tail.node.disconnect(audioNode);
+        node.connect(audioNode);
+      });
+    }
+
+    access(nodeName) {
+      return lookup[nodeName];
+    }
+  }
+})();
