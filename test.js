@@ -673,6 +673,20 @@ const AudioGraph = (() => {
       lookup[node.name] = node;
     }
 
+    patch(node) {
+      const nodeToPatch = typeof node === 'string' ? this.access(location) : node;
+
+      nodeToPatch.prevNode().disconnect(nodeToPatch.nextNode());
+      nodeToPatch.connect(nodeToPatch.nextNode());
+    }
+
+    unpatch(node) {
+      const nodeToRemove = typeof node === 'string' ? this.access(location) : node;
+
+      nodeToRemove.disconnect(nodeToRemove.nextNode());
+      nodeToRemove.prevNode().connect(nodeToRemove.nextNode());
+    }
+
     insertAudioNode(audioNode) {
       audioNode.connect(this.head.node);
     }
