@@ -362,12 +362,16 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
     const length = buffer.length;
     const sum = buffer.reduce((sum, sample) => sum + (sample * sample), 0);
 
-    if (playing) {
-      outputMeterInst.drawLevel(dbfs(sum, length));
+    if (active) {
       reductionMeterInst.drawLevel(compressor.reduction);
     } else {
-      outputMeterInst.drawLevel(0);
       reductionMeterInst.drawLevel(0);
+    }
+
+    if (playing) {
+      outputMeterInst.drawLevel(dbfs(sum, length));
+    } else {
+      outputMeterInst.drawLevel(0);
     }
   }
 
@@ -393,37 +397,27 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
     storage.setState(nextState);
   });
 
-  // We have to manually disconnect everything to stop the compressor from functioning,
-  // then reconnect the source to the destination.
-  // The process is reversed when the compressor is toggled back on
   document.getElementById('toggle').addEventListener('click', (event) => {
     if (active) {
-      // TODO: clear meters. Will need a meter object most likely!
-      compressor.gain.disconnect(audioContext.destination);
-      compressor.gain.disconnect(processor);
-      processor.disconnect(audioContext.destination);
-      source.disconnect(compressor.node);
-      source.connect(audioContext.destination);
+      active = false;
+      compressorGraph.unpatchFrom(sourceAudioNode);
       storage.setState('enabled', false)
       document.getElementById('status').innerText = 'disabled';
-      active = false;
     } else {
-      source.disconnect(audioContext.destination);
-      patch(source, [ compressor.out ], audioContext.destination, processFn);
+      compressorGraph.patchInto(sourceAudioNode);
       storage.setState('enabled', true);
       document.getElementById('status').innerText = 'enabled';
       active = true;
     }
   });
 
-  const sourceGraph = new AudioGraph();
-  const nodeGraph = new AudioGraph();
-  const processorGraph = new AudioGraph();
+  // compressor chain
+  const compressorGraph = new AudioGraph();
+
   const processFn = onAudioProcess(compressor);
   processor.onaudioprocess = processFn;
 
-  sourceGraph.push(new AudioNode({ name: 'source', node: source }));
-  nodeGraph.chain([
+  compressorGraph.chain([
     {
       name: 'compressor',
       node: compressor.node,
@@ -433,20 +427,22 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
       node: compressor.out
     }
   ]);
-  sourceGraph.push(new AudioNode({ name: 'source', node: source }));
-  sourceGraph.connect(nodeGraph.head.node);
-  processorGraph.push(new AudioNode({name: 'processor', node: processor}));
-  nodeGraph.connect(processorGraph.head.node);
 
-  processorGraph.connect(audioContext.destination);
-  nodeGraph.connect(audioContext.destination);
+  const sourceAudioNode = new AudioNode({ name: 'source', node: source });
+  const processorAudioNode = new AudioNode({ name: 'processor', node: processor });
+  const destinationAudioNode = new AudioNode({ name: 'output', node: audioContext.destination });
+
+  compressorGraph.insertAudioNode(sourceAudioNode);
+  compressorGraph.outputToAudioNode(processorAudioNode);
+  compressorGraph.outputToAudioNode(destinationAudioNode);
+  processorAudioNode.connect(destinationAudioNode.node);
 
   const audioEl = document.querySelector('audio');
   /**
    * Time in MS that the code should delay the audio before hitting the signal chain
-   * This is useful when 'crushing' the source material, such as when using the compressor
+   * This is useful when 'crushing' the source material, like when using the compressor
    * as an extreme limiter.  The web audio dynamics node, while pretty fast, is not fast enough to
-   * apply very hard limiting to plosive sounds.
+   * apply very hard limiting to plosives.
    *
    * This will affect a gentle fade in, at the cost of hearing the sound immediately.
    * Something like this might be better installed at the end of your signal chain
@@ -608,19 +604,22 @@ class AudioNode {
     return this.prev && this.prev.node;
   }
 
+  // connect and disconnect proxy to underlying AudioParam object
   connect(node) {
     return this.node.connect(node);
   }
 
-  disconnect() {
+  disconnect(node) {
     return this.node.disconnect(node);
   }
 }
 
-/// HEADS UP: AudioGraph and AudioNode are the same thing. they both need to share some common
-/// functionality, which I guess ill write later
+/// HEADS UP: AudioGraph and AudioNode are (basically?) the same thing.
+// it seems like maybe i can rewrite these to share functionality
+// TODO: rewrite these, the first pass was meh
 const AudioGraph = (() => {
   const lookup = {};
+  const outputs = [];
 
   return class {
     constructor() {
@@ -674,39 +673,31 @@ const AudioGraph = (() => {
       lookup[node.name] = node;
     }
 
-    insertBefore(location, node) {
-      // TODO: WRITE THIS FUNCTION
-      const insertNode = lookup[location];
-
-      if (!insertNode) {
-        throw new Error('Can\'t insert a node before one that doesn\'t exist');
-      }
+    insertAudioNode(audioNode) {
+      audioNode.connect(this.head.node);
     }
 
-    insertAfter(location, node) {
-      // TODO: WRITE THIS FUNCTION
+    outputToAudioNode(audioNode) {
+      outputs.push(audioNode.node);
+
+      this.tail.node.connect(audioNode.node);
     }
 
-    connect(node) {
-      this.tail.connect(node);
+    patchInto(node) {
+      outputs.forEach((audioNode) => {
+        // this assumes that the node we want to patch into is connected to
+        // the outputs, but that isnt necessarily the case.
+        node.disconnect(audioNode);
+        node.connect(this.head.node);
+        this.tail.node.connect(audioNode);
+      });
     }
 
-    disconnect(node) {
-      this.tail.disconnect(node);
-    }
-
-    patch(node) {
-      const nodeToPatch = typeof node === 'string' ? this.access(location) : node;
-
-      nodeToPatch.prevNode().disconnect(nodeToPatch.nextNode());
-      nodeToPatch.connect(nodeToPatch.nextNode());
-    }
-
-    unpatch(node) {
-      const nodeToRemove = typeof node === 'string' ? this.access(location) : node;
-
-      nodeToRemove.disconnect(nodeToRemove.nextNode());
-      nodeToRemove.prevNode().connect(nodeToRemove.nextNode());
+    unpatchFrom(node) {
+      outputs.forEach((audioNode) => {
+        this.tail.node.disconnect(audioNode);
+        node.connect(audioNode);
+      });
     }
 
     access(nodeName) {
@@ -714,104 +705,3 @@ const AudioGraph = (() => {
     }
   }
 })();
-
-
-/**
- * example audio chain
- * source -> compressor -> destination
- */
-/**
- * to disconnect an active node, we have to:
- *    disconnect the node from the node following it
- *    connect the node preceeding it to the node following it
- *
- *    same process needed for the script processor node
- *
- *    so we need to maintain our own graph? can i store this as a flat map with
- *    previous and next pointers? Basically a linked list with keys? What issues would that
- *    expose?
- *
- *    If there were multiple compressors, like in a mixing desk, there would be a channel,
- *    that channel would be connected to other channels, script processor, and the destination...
- *    each channel would also have its own graph (connected to the script processor as well?)
- *
- *    graph {
- *      soundSource: {
- *        previous: null,
- *        next: [compressor]
- *      }
- *
- *      compressor {
- *        previous: soundSource,
- *        next: [
- *          scriptProcessor,
- *          destination
- *        ]
- *      }
- *
- *      destination: {
- *        previous: compressor
- *        next: null
- *      }
- *
- *    }
- *
- *    class Node() {
- *      this.previous = { preceeding param node in chain }
- *      this.next { [ following nodes in chain ] }
- *      this.name = { the name of the node in the graph }
- *
- *    }
- *
- *    a channel is a group of nodes. it also has previous and next properties.
- *    when a channel is disconnected, the last node in its node collection is disconnected,
- *    and all other nodes in that collection are ignored. They remain connected to each other,
- *    but not to the system.
- *
- *    these graphs should all be pretty small so there isnt really a huge disadvantage to
- *    using linked lists, but! i dont want to remove a node that doesnt have any pointers
- *    to it, I want to to stay there, ready to be repatched.
- *
- *    the downside of a channel always needing to have a reference to the name of its terminal
- *    component is not that big. ALSO, all channels will have a gain, so theoretically that gain
- *    can be its terminal point. each channels gain can be connnected to the next.
- *    The previous node can always point to the last gain.
- *
- *    gain being the terminal node makes sense!
- *
- *    class Channel extends Node {
- *      super(attrs)
- *
- *
- *
- *    }
- *
- *    class
- *
- *    every node can have a graph / graph is made of up nodes
- *
- *    patch also need to add the node if it doesnt have an entry in the graph already
- *
- *    patch(newNode, position) {
- *      const patchInto = position.next;
- *      patchInto.forEach(patchPoint =>
- *        position.node.disconnect(patchPoint)
- *        position.node.connect(newNode);
- *        newNode.connect(patchPoint)
- *      )
- *
- *      newNode.next = position.next;
- *      newNode.previous = position
- *      position.next = [newNode]
- *    }
- *
- *    unpatch(nodeToRemove) {
- *      nodeToRemove.next.forEach(patchPoint =>
- *        nodeToRemove.disconnect(graph[patchPoint])
- *        graph[nodeToRemove.previous].connect(graph[patchPoint])
- *      )
- *
- *      nodeToRemove.next = null
- *      nodeToRemove.previous = null
- *    }
- */
