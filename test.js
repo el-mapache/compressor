@@ -440,7 +440,7 @@ document.addEventListener('DOMContentLoaded', async function onContentLoad() {
    * This will affect a gentle fade in, at the cost of hearing the sound immediately.
    * Something like this might be better installed at the end of your signal chain
    */
-  const fadeInBuffer = 160; // TODO: Make this opt in, upon initialization of plug-in
+  const fadeInBuffer = 200; // TODO: Make this opt in, upon initialization of plug-in
 
 
   const togglePlaying = () => {
